@@ -16,14 +16,13 @@ set -euo pipefail
 source "$(dirname "$0")/00_common.sh"
 
 FIREWALLD_PKG="firewalld"
+SSH_PORT="${SSH_PORT:-}"
+ENABLE_WEB="${ENABLE_WEB:-0}"
+WEB_PORTS="${WEB_PORTS:-80 443}"
 
 ensure_firewalld_installed() {
-  if ! rpm -q "${FIREWALLD_PKG}" &>/dev/null; then
-    log "Installing firewalld..."
-    dnf install -y "${FIREWALLD_PKG}"
-  else
-    log "firewalld is already installed."
-  fi
+  ensure_package "${FIREWALLD_PKG}"
+  log "firewalld is already installed or has been installed."
 }
 
 ensure_firewalld_running() {
@@ -64,33 +63,49 @@ configure_zone_for_ssh_only() {
   local zone="$1"
   local ssh_port="$2"
 
-  log "Configuring firewalld zone '${zone}' to allow only SSH..."
+  log "Configuring firewalld zone '${zone}' to allow SSH (and web if enabled)..."
 
-  # 1) Ensure ssh service is allowed
+  # Always allow ssh service
   firewall-cmd --permanent --zone="$zone" --add-service=ssh
 
-  # 2) Ensure the custom SSH port is allowed (if not 22)
+  # Allow custom ssh port when not default
   if [[ "$ssh_port" != "22" ]]; then
-    log "Detected SSH port: ${ssh_port}. Opening it explicitly."
     firewall-cmd --permanent --zone="$zone" --add-port="${ssh_port}/tcp"
   fi
 
-  # 3) Remove all services other than ssh from the zone
+  if [[ "${ENABLE_WEB}" == "1" ]]; then
+    log "ENABLE_WEB=1; opening HTTP/HTTPS (${WEB_PORTS})."
+    firewall-cmd --permanent --zone="$zone" --add-service=http
+    firewall-cmd --permanent --zone="$zone" --add-service=https
+    for p in ${WEB_PORTS}; do
+      firewall-cmd --permanent --zone="$zone" --add-port="${p}/tcp" || true
+    done
+  fi
+
+  # Remove all services other than ssh (+ http/https if enabled)
   local svc
   for svc in $(firewall-cmd --permanent --zone="$zone" --list-services); do
-    if [[ "$svc" != "ssh" ]]; then
-      log "Removing unnecessary service '${svc}' from zone '${zone}'..."
-      firewall-cmd --permanent --zone="$zone" --remove-service="$svc" || true
-    fi
+    case "$svc" in
+      ssh) continue ;;
+      http|https)
+        [[ "${ENABLE_WEB}" == "1" ]] && continue
+        ;;
+    esac
+    log "Removing unnecessary service '${svc}' from zone '${zone}'..."
+    firewall-cmd --permanent --zone="$zone" --remove-service="$svc" || true
   done
 
-  # 4) (Optional hardening) You could also remove all open ports except SSH:
-  #    for p in $(firewall-cmd --permanent --zone="$zone" --list-ports); do
-  #      if [[ "$p" != "${ssh_port}/tcp" ]]; then
-  #        log "Removing unnecessary port '${p}' from zone '${zone}'..."
-  #        firewall-cmd --permanent --zone="$zone" --remove-port="$p" || true
-  #      fi
-  #    done
+  # Remove ports except allowed ssh (+ optional web)
+  for p in $(firewall-cmd --permanent --zone="$zone" --list-ports); do
+    case "$p" in
+      "${ssh_port}/tcp") continue ;;
+      "80/tcp"|"443/tcp")
+        [[ "${ENABLE_WEB}" == "1" ]] && continue
+        ;;
+    esac
+    log "Removing unnecessary port '${p}' from zone '${zone}'..."
+    firewall-cmd --permanent --zone="$zone" --remove-port="$p" || true
+  done
 }
 
 reload_and_show() {
@@ -106,15 +121,24 @@ reload_and_show() {
 
 main() {
   require_root
+  require_rhel_like
 
   log "=== Firewall baseline setup (firewalld + SSH only) ==="
 
   ensure_firewalld_installed
   ensure_firewalld_running
 
-  local zone ssh_port
+  local zone ssh_port web_state
   zone="$(get_default_zone)"
-  ssh_port="$(detect_ssh_port)"
+  ssh_port="${SSH_PORT:-}"
+  if [[ -z "$ssh_port" ]]; then
+    ssh_port="$(detect_ssh_port)"
+  fi
+  if [[ "${ENABLE_WEB}" == "1" ]]; then
+    web_state="OPEN (ENABLE_WEB=1)"
+  else
+    web_state="CLOSED by default (set ENABLE_WEB=1 to open)"
+  fi
 
   log "Default firewalld zone: ${zone}"
   log "Detected SSH port: ${ssh_port}"
@@ -132,6 +156,7 @@ Firewall baseline applied.
 - SSH service is allowed.
 - SSH port ${ssh_port}/tcp is explicitly opened (if not 22).
 - Other default services in zone '${zone}' have been removed.
+- Web ports (80/443) are ${web_state}.
 
 Next steps (VERY IMPORTANT):
 

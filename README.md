@@ -1,264 +1,218 @@
 # Secure AlmaLinux Server Bootstrap
 
-A complete, modular, idempotent hardening and provisioning toolkit for
-fresh **AlmaLinux / RHEL 8+** servers.
+A complete, modular, idempotent hardening and provisioning toolkit for fresh **AlmaLinux / RHEL 8+** servers.
 
-This toolkit is designed for **operators and power-users**, especially those
-deploying **Docker-heavy workloads** (e.g., algorithmic trading bots,
-self-hosted services, automation systems) while maintaining a strongly
-locked-down baseline security posture.
+Designed for **operators and power-users**, especially those deploying **Docker-heavy workloads** (e.g., algorithmic trading bots, self-hosted services, automation systems) while maintaining a strongly locked-down baseline security posture.
 
 ---
 
-## ð Features
-
-This bootstrap system provides:
-
-### **1. Secure SSH**
-- Strong emergency root password rotation
-- Non-root user creation with SSH key authentication only
-- Root login disabled
-- Password login disabled
-- Enforced drop-in configuration using `sshd_config.d/`
-
-### **2. Firewall Baseline (firewalld)**
-- Only SSH exposed to the Internet
-- All other services/ports removed
-- Supports custom SSH ports
-- Idempotent configuration
-
-### **3. Fail2ban Protection**
-- Protects SSH from brute-force attacks
-- Uses firewall rich rules (`firewallcmd-rich-rules`)
-- Config in `/etc/fail2ban/jail.d/`
-- Safe to run multiple times
-
-### **4. Docker + Tools Setup**
-- Installs Docker CE, CLI, Buildx, and Compose plugin
-- Installs common CLI utilities (htop, git, traceroute, etc.)
-- Adds your non-root user to the `docker` group
-- Runs a test container to validate Docker installation
-
-### **5. Reliable Orchestration**
-- A top-level `bootstrap.sh` that:
-  - Runs modules in the correct order
-  - Pauses for safety checks after risky changes
-  - Ensures you never lock yourself out of SSH
-  - Makes all scripts executable automatically
+## 🔐 What it does
+- Runs `dnf update`, installs EPEL, chrony, timezone, and base CLI tools.
+- Rotates the emergency root password (stored in `/root/root_emergency_password.txt`).
+- Creates a primary admin user with multiple SSH keys, adds it to `wheel`.
+- Hardens SSH: drop-in config, custom port, optional root/password login disable.
+- Firewalld baseline: open only SSH (plus HTTP/HTTPS if enabled), remove everything else.
+- Fail2ban: sane SSH jail, uses firewalld rich rules, respects custom SSH port.
+- Optional Docker: install Docker CE/CLI/Buildx/Compose and add your user to `docker`.
+- Orchestration with safety pauses so you don’t lock yourself out.
 
 ---
 
-## ð Directory Structure
+## 🗂 Directory Structure
 
+```
 bootstrap/
-âââ 00_common.sh
-âââ 01_root_password.sh
-âââ 02_create_user.sh
-âââ 03_harden_sshd.sh
-âââ 04_firewall.sh
-âââ 05_fail2ban.sh
-âââ 06_docker_tools.sh
-âââ bootstrap.sh
+├── 00_common.sh
+├── 01_root_password.sh
+├── 02_create_user.sh
+├── 03_harden_sshd.sh
+├── 04_firewall.sh
+├── 05_fail2ban.sh
+├── 06_docker_tools.sh
+└── bootstrap.sh
+```
 
-yaml
-Copy code
-
-`bootstrap.sh` calls each script in order.
+`bootstrap.sh` calls each script in order and handles safety pauses.
 
 ---
 
-## ð Quick Start
+## 🚀 Quick Start
 
-### 1. Upload files to your server:
-
+1) Upload files to your server:
 ```bash
 mkdir -p ~/bootstrap
 cd ~/bootstrap
 # Upload scripts into this directory
-2. Make the bootstrap executable:
-bash
-Copy code
+```
+
+2) Make the bootstrap executable:
+```bash
 chmod +x bootstrap.sh
-3. Run the bootstrap:
-bash
-Copy code
+```
+
+3) Run the bootstrap:
+```bash
 sudo ./bootstrap.sh
-4. Follow prompts carefully
-The bootstrap will request confirmation before:
+```
 
-Hardening SSH
+4) Follow prompts carefully. The bootstrap will request confirmation before:
+- Hardening SSH
+- Reloading SSH configuration
+- Enabling firewalld
+- Applying firewall rules
+- Proceeding after each critical step
 
-Reloading SSH configuration
+It will remind you to test SSH from a new terminal before continuing.
 
-Enabling firewalld
+Run with environment overrides or a config file:
+```bash
+# One-off overrides
+SSH_PORT=2222 ADMIN_USER=alice ENABLE_WEB=1 sudo ./bootstrap.sh
 
-Applying firewall rules
+# Or create an optional config file (auto-sourced if present)
+cat > bootstrap.conf <<'EOF'
+ADMIN_USER=admin
+SSH_PORT=22
+DISABLE_ROOT_LOGIN=1
+DISABLE_PASSWORD_AUTH=1
+ENABLE_WEB=0
+ENABLE_DOCKER=0
+ADMIN_SSH_KEYS="ssh-ed25519 AAA... user@example
+ssh-rsa BBB... user2@example"
+TIMEZONE=UTC
+EOF
+```
+You can also set `CONFIG_FILE=/path/to/conf` to point at another config file.
 
-Proceeding after each critical step
+---
 
-It will always remind you to test SSH from a new terminal before continuing.
+## 🛡 Safety Philosophy
 
-ð¡ Safety Philosophy
-The system is engineered to avoid accidental lockouts:
-
-SSH changes always pause for validation.
-
-firewalld changes always pause for external connectivity checks.
-
-bootstrap.sh will not continue unless you explicitly confirm.
+Engineered to avoid accidental lockouts:
+- SSH changes pause for validation
+- firewalld changes pause for external connectivity checks
+- `bootstrap.sh` will not continue unless you explicitly confirm
 
 Every module is idempotent:
+- Re-running scripts will not duplicate settings
+- Drop-in configs are overwritten cleanly
+- No inconsistent/fragmented state
 
-Re-running scripts will not duplicate settings
+---
 
-Drop-in configs are overwritten cleanly
+## 🛠 Individual Modules
 
-No inconsistent/fragmented state
+### 00_common.sh
+Shared helpers (logging, OS guard, package install wrapper, config loader, timezone/chrony setup, base tools).
 
-ð§ Individual Modules
-00_common.sh
-Shared helper functions (logging, root checks, command checks).
-
-01_root_password.sh
-Rotates rootâs emergency password and stores it in:
-
-bash
-Copy code
+### 01_root_password.sh
+Rotates root’s emergency password and stores it in:
+```bash
 /root/root_emergency_password.txt
-Permission restricted to root only.
+```
+Permission is restricted to root only.
+Env: `ROTATE_ROOT_PASSWORD=0` to skip; `ROOT_PASSWORD` to provide your own.
 
-02_create_user.sh
-Guides you to:
+### 02_create_user.sh
+Creates a primary admin user, adds to `wheel`, and loads multiple SSH keys from:
+- `ADMIN_SSH_KEYS` (multiline env), `ADMIN_SSH_KEYS_FILE` (file), or interactive paste.
+Permissions: `~/.ssh` 700, `authorized_keys` 600, owned by the user.
+Env: `ADMIN_USER` (default `admin`), `ADMIN_SHELL` (default `/bin/bash`).
 
-Choose a username
+### 03_harden_sshd.sh
+Enforces drop-in config, comments conflicting directives elsewhere, writes `99-hardening.conf` with:
+- `Port` (from `SSH_PORT`, default 22)
+- `PermitRootLogin` (`DISABLE_ROOT_LOGIN=1` => `no`, else `prohibit-password`)
+- `PasswordAuthentication` (`DISABLE_PASSWORD_AUTH=1` => `no`, else `yes`)
+- `ChallengeResponseAuthentication no`, `PubkeyAuthentication yes`
 
-Paste one or more SSH public keys
+Reloads SSH safely after syntax validation.
 
-Sets up .ssh/authorized_keys
+### 04_firewall.sh
+Installs/enables firewalld, opens only SSH (uses `SSH_PORT` or detected port). Removes other services/ports. If `ENABLE_WEB=1`, opens HTTP/HTTPS (custom `WEB_PORTS` allowed).
 
-Adds user to wheel for sudo
+### 05_fail2ban.sh
+Installs EPEL + fail2ban, creates `/etc/fail2ban/jail.d/sshd-hardening.conf` for your SSH port, bans after 5 failures within 10 minutes for 1 hour, and integrates with firewalld rich rules.
 
-03_harden_sshd.sh
-Ensures Include /etc/ssh/sshd_config.d/*.conf
+### 06_docker_tools.sh
+Optional (ENABLE_DOCKER=1): installs Docker CE/CLI/Buildx/Compose + CLI utilities, adds your admin user to `docker`, runs `hello-world` test.
 
-Comments conflicting parameters in all other configs
+---
 
-Creates 99-hardening.conf with final overrides:
+## 🔍 After Bootstrapping
 
-PermitRootLogin no
-
-PasswordAuthentication no
-
-ChallengeResponseAuthentication no
-
-PubkeyAuthentication yes
-
-Reloads SSH safely after syntax validation
-
-04_firewall.sh
-Installs & enables firewalld
-
-Detects your actual SSH port using sshd -T
-
-Allows only the SSH service/port
-
-Removes all other services from the default zone
-
-Reloads and prints the active config
-
-05_fail2ban.sh
-Installs EPEL + fail2ban
-
-Creates /etc/fail2ban/jail.d/sshd-hardening.conf
-
-Bans after:
-
-5 failures
-
-within 10 minutes
-
-ban lasts 1 hour
-
-Integrated with firewalld rich rules
-
-06_docker_tools.sh
-Inhe Docker service
-
-Adds your non-root user to the docker group
-
-Runs docker run hello-world as validation
-
-ð After Bootstrapping
 As your non-root user:
-
-bash
-Copy code
+```bash
 docker ps
 docker run --rm hello-world
-Deploying services securely
-Expose container ports only when needed
+```
 
-Use firewalld to explicitly allow each one
+Deploy services securely:
+- Expose container ports only when needed
+- Use firewalld to explicitly allow each one
+- Avoid `--privileged` containers
+- Prefer network isolation (user-defined Docker networks)
 
-Avoid --privileged containers
+---
 
-Prefer network isolation (user-defined Docker networks)
+## 🧪 Idempotency and Testing
 
-A clean, minimal attack surface is ideal for:
-
-Algorithmic trading bots
-
-API services
-
-Monitoring agents
-
-Local data pipelines
-
-ð§ª Idempotency and Testing
 Each module can be executed independently:
-
-bash
-Copy code
+```bash
 sudo ./03_harden_sshd.sh
 sudo ./04_firewall.sh
 sudo ./05_fail2ban.sh
 sudo ./06_docker_tools.sh
+```
+
 Re-running modules:
+- Does not break configurations
+- Does not create duplicate entries
+- Updates configs safely
 
-Does not break configurations
+---
 
-Does not create duplicate entries
+## 📚 Future Extensions (Optional)
 
-Updates configs safely
-
-ð Future Extensions (Optional)
 You may extend the toolkit with additional modules:
+- Automatic Docker backup system
+- Daily log rotation & cleanup
+- System monitoring with Prometheus node_exporter
+- Swap optimization
+- Kernel tuning for network performance
+- Automatic unattended upgrades
 
-Automatic Docker backup system
+---
 
-Daily log rotation & cleanup
+## ⚙️ Configuration (env vars or `bootstrap.conf`)
+- `RUN_DNF_UPDATE` (default `1`) – run `dnf update -y`.
+- `TIMEZONE` (default `UTC`) – set with `timedatectl`.
+- `INSTALL_TELNET` (default `0`) – add telnet to base tools.
+- `ADMIN_USER` (default `admin`) – primary admin username.
+- `ADMIN_SHELL` (default `/bin/bash`) – login shell.
+- `ADMIN_SSH_KEYS` – multiline public keys.
+- `ADMIN_SSH_KEYS_FILE` – file with public keys.
+- `SSH_PUBKEYS` / `SSH_PUBKEYS_FILE` – aliases for the above.
+- `SSH_PORT` (default detect/22) – SSH listen port.
+- `DISABLE_ROOT_LOGIN` (default `1`) – set `PermitRootLogin no`.
+- `DISABLE_PASSWORD_AUTH` (default `1`) – set `PasswordAuthentication no`.
+- `ENABLE_WEB` (default `0`) – open HTTP/HTTPS in firewalld.
+- `WEB_PORTS` (default `80 443`) – extra web ports to open when `ENABLE_WEB=1`.
+- `ROTATE_ROOT_PASSWORD` (default `1`) – skip with `0`; `ROOT_PASSWORD` to supply your own.
+- `ENABLE_DOCKER` (default `0`) – install Docker when `1`.
+- `DOCKER_USER` (default `ADMIN_USER` or `SUDO_USER`) – user to add to `docker`.
+- `CONFIG_FILE` – override path to config (default `./bootstrap.conf`).
 
-System monitoring with Prometheus node_exporter
+Set them in the environment or place them in `bootstrap.conf` (auto-sourced by all scripts).
 
-Swap optimization
+---
 
-Kernel tuning for network performance
+## 🎉 Conclusion
 
-Automatic unattended upgrades
-
-I can generate these modules on request.
-
-ð Conclusion
 This bootstrap system transforms a fresh AlmaLinux/RHEL server into a:
-
-Strongly secured
-
-Minimal exposure
-
-Docker-ready
-
-Operator-friendly
-environment.
+- Strongly secured
+- Minimal exposure
+- Docker-ready
+- Operator-friendly environment
 
 Perfect for self-hosting, operations engineering, and quantitative trading workloads.
-

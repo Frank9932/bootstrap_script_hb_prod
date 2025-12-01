@@ -16,10 +16,12 @@ set -euo pipefail
 source "$(dirname "$0")/00_common.sh"
 
 DOCKER_REPO_URL="https://download.docker.com/linux/centos/docker-ce.repo"
+ENABLE_DOCKER="${ENABLE_DOCKER:-0}"
+DOCKER_USER="${DOCKER_USER:-${ADMIN_USER:-}}"
 
 install_cli_tools() {
   log "Installing common CLI tools..."
-  dnf install -y \
+  ensure_packages \
     htop screen \
     curl wget git \
     nc traceroute \
@@ -31,9 +33,7 @@ install_cli_tools() {
 configure_docker_repo() {
   log "Configuring Docker CE repository..."
   # Install dnf-plugins-core if not present
-  if ! rpm -q dnf-plugins-core &>/dev/null; then
-    dnf install -y dnf-plugins-core
-  fi
+  ensure_package dnf-plugins-core
 
   # If the repo already exists, don't add it again
   if ! grep -q "docker-ce-stable" /etc/yum.repos.d/*.repo 2>/dev/null; then
@@ -61,6 +61,11 @@ install_docker() {
 
 choose_docker_user() {
   # Prefer SUDO_USER if available and not root.
+  if [[ -n "${DOCKER_USER}" ]]; then
+    echo "${DOCKER_USER}"
+    return 0
+  fi
+
   if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]]; then
     echo "${SUDO_USER}"
     return 0
@@ -106,6 +111,12 @@ test_docker() {
 
 main() {
   require_root
+  require_rhel_like
+
+  if [[ "${ENABLE_DOCKER}" != "1" ]]; then
+    log "ENABLE_DOCKER=${ENABLE_DOCKER}; skipping Docker installation."
+    return 0
+  fi
 
   log "=== Docker + tools installation start ==="
 

@@ -4,9 +4,9 @@
 # SSH hardening for AlmaLinux / RHEL 8+:
 # - Backup /etc/ssh/sshd_config
 # - Ensure Include /etc/ssh/sshd_config.d/*.conf
-# - Comment out PasswordAuthentication/PermitRootLogin/etc. in all other configs
+# - Comment out sensitive directives elsewhere
 # - Create 99-hardening.conf as the final override
-# - Disable root login and password auth, only allow key auth
+# - Enforce key auth; optionally change port and allow/deny root/password login
 #
 
 set -euo pipefail
@@ -17,6 +17,10 @@ source "$(dirname "$0")/00_common.sh"
 SSHD_CONFIG="/etc/ssh/sshd_config"
 SSHD_DROPIN_DIR="/etc/ssh/sshd_config.d"
 HARDEN_CONF="${SSHD_DROPIN_DIR}/99-hardening.conf"
+
+SSH_PORT="${SSH_PORT:-22}"
+DISABLE_ROOT_LOGIN="${DISABLE_ROOT_LOGIN:-1}"
+DISABLE_PASSWORD_AUTH="${DISABLE_PASSWORD_AUTH:-1}"
 
 backup_sshd_config() {
   if [[ -f "$SSHD_CONFIG" && ! -f "${SSHD_CONFIG}.orig" ]]; then
@@ -70,15 +74,28 @@ write_hardening_dropin() {
   cat > "$HARDEN_CONF" << 'EOF_INNER'
 # 99-hardening.conf
 # Final SSH hardening overrides for RHEL 8+ / AlmaLinux.
+EOF_INNER
 
-PermitRootLogin no
-PasswordAuthentication no
+  {
+    echo
+    echo "Port ${SSH_PORT}"
+    if [[ "${DISABLE_ROOT_LOGIN}" == "1" ]]; then
+      echo "PermitRootLogin no"
+    else
+      echo "PermitRootLogin prohibit-password"
+    fi
+
+    if [[ "${DISABLE_PASSWORD_AUTH}" == "1" ]]; then
+      echo "PasswordAuthentication no"
+    else
+      echo "PasswordAuthentication yes"
+    fi
+
+    cat <<'EOF_INNER'
 ChallengeResponseAuthentication no
 PubkeyAuthentication yes
-
-# If you want to change the SSH port, uncomment and adjust:
-# Port 2222
 EOF_INNER
+  } >>"$HARDEN_CONF"
 }
 
 test_and_reload_sshd() {
@@ -106,16 +123,18 @@ test_and_reload_sshd() {
 show_effective_settings() {
   log "Effective sshd settings (subset):"
   if sshd -T -C user=root -C addr=127.0.0.1 -C host=localhost 2>/dev/null \
-      | grep -E 'permitrootlogin|passwordauthentication|pubkeyauthentication'; then
+      | grep -E 'port |permitrootlogin|passwordauthentication|pubkeyauthentication'; then
     :
   else
-    sshd -T 2>/dev/null | grep -E 'permitrootlogin|passwordauthentication|pubkeyauthentication' || true
+    sshd -T 2>/dev/null | grep -E 'port |permitrootlogin|passwordauthentication|pubkeyauthentication' || true
   fi
 }
 
 main() {
   require_root
+  require_rhel_like
 
+  log "SSH_PORT=${SSH_PORT} DISABLE_ROOT_LOGIN=${DISABLE_ROOT_LOGIN} DISABLE_PASSWORD_AUTH=${DISABLE_PASSWORD_AUTH}"
   log "=== SSH hardening start ==="
   backup_sshd_config
   ensure_include_dropins
@@ -125,6 +144,8 @@ main() {
   comment_key_everywhere "PermitRootLogin"
   comment_key_everywhere "ChallengeResponseAuthentication"
   comment_key_everywhere "PubkeyAuthentication"
+  # Port lines in other files should not override
+  comment_key_everywhere "Port"
 
   # Our final override
   write_hardening_dropin

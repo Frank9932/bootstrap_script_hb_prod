@@ -2,70 +2,111 @@
 #
 # 02_create_user.sh
 # Create a new non-root user and configure SSH public key authentication.
+# Configurable via env / bootstrap.conf:
+#   ADMIN_USER         - username to create (default: admin; empty = prompt)
+#   ADMIN_SHELL        - login shell (default: /bin/bash)
+#   ADMIN_SSH_KEYS     - multiline env var with one or more public keys
+#   ADMIN_SSH_KEYS_FILE- file containing one or more public keys
+#   SSH_PUBKEYS / SSH_PUBKEYS_FILE are also accepted aliases.
 #
+
+set -euo pipefail
 
 source "$(dirname "$0")/00_common.sh"
 require_root
+require_rhel_like
 
-main() {
-  read -rp "Enter the username to create (e.g., trader): " NEW_USER
+ADMIN_USER="${ADMIN_USER:-admin}"
+ADMIN_SHELL="${ADMIN_SHELL:-/bin/bash}"
+ADMIN_SSH_KEYS="${ADMIN_SSH_KEYS:-${SSH_PUBKEYS:-}}"
+ADMIN_SSH_KEYS_FILE="${ADMIN_SSH_KEYS_FILE:-${SSH_PUBKEYS_FILE:-}}"
 
-  if [[ -z "$NEW_USER" ]]; then
-    err "Username cannot be empty."
-    exit 1
-  fi
+prompt_for_username() {
+  local name
+  read -rp "Enter the username to create (e.g., trader): " name
+  echo "$name"
+}
 
-  # Create the user if it does not already exist
-  if id "$NEW_USER" &>/dev/null; then
-    warn "User '$NEW_USER' already exists. Continuing..."
+ensure_user_exists() {
+  local user="$1"
+  if id "$user" &>/dev/null; then
+    warn "User '$user' already exists. Continuing..."
   else
-    log "Creating user '$NEW_USER'..."
-    useradd -m -s /bin/bash "$NEW_USER"
+    log "Creating user '$user'..."
+    useradd -m -s "$ADMIN_SHELL" "$user"
+    log "Adding '$user' to the 'wheel' group for sudo access..."
+    usermod -aG wheel "$user"
+  fi
+}
 
-    log "Adding '$NEW_USER' to the 'wheel' group for sudo access..."
-    usermod -aG wheel "$NEW_USER"
+collect_keys() {
+  local dest_tmp="$1"
+
+  # From file, if provided
+  if [[ -n "$ADMIN_SSH_KEYS_FILE" && -f "$ADMIN_SSH_KEYS_FILE" ]]; then
+    cat "$ADMIN_SSH_KEYS_FILE" >>"$dest_tmp"
   fi
 
-  # Prepare the .ssh directory
-  local ssh_dir="/home/$NEW_USER/.ssh"
+  # From env multiline variable
+  if [[ -n "$ADMIN_SSH_KEYS" ]]; then
+    printf '%s\n' "$ADMIN_SSH_KEYS" >>"$dest_tmp"
+  fi
+
+  # From interactive input if still empty
+  if [[ ! -s "$dest_tmp" ]]; then
+    log "Paste one or more SSH public keys for the admin user."
+    log "Accepted formats: ssh-ed25519 and ssh-rsa."
+    log "Press Ctrl+D when finished."
+    cat >>"$dest_tmp"
+  fi
+}
+
+install_keys() {
+  local user="$1" tmp="$2"
+  local ssh_dir="/home/$user/.ssh"
   local auth_file="${ssh_dir}/authorized_keys"
 
-  mkdir -p "$ssh_dir"
-  chmod 700 "$ssh_dir"
-  chown "$NEW_USER:$NEW_USER" "$ssh_dir"
+  ensure_dirs_permissions "$ssh_dir" 700 "${user}:${user}"
+  touch "$auth_file"
 
-  log "Paste one or more SSH public keys for user '$NEW_USER'."
-  log "Accepted formats: ssh-ed25519 and ssh-rsa."
-  log "Press Ctrl+D when finished."
-
-  # Read keys from stdin into a temporary file
-  TEMP_FILE="$(mktemp)"
-  cat > "$TEMP_FILE"
-
-  if [[ -s "$TEMP_FILE" ]]; then
+  if [[ -s "$tmp" ]]; then
     while IFS= read -r line; do
       [[ -z "$line" ]] && continue
 
-      # Avoid duplicate keys
       if [[ -f "$auth_file" ]] && grep -Fxq "$line" "$auth_file"; then
         warn "Duplicate key skipped: $line"
       else
-        echo "$line" >> "$auth_file"
-        log "Added SSH key."
+        echo "$line" >>"$auth_file"
+        log "Added SSH key for ${user}."
       fi
-    done < "$TEMP_FILE"
+    done <"$tmp"
   else
     warn "No SSH keys were provided."
   fi
 
+  chmod 600 "$auth_file"
+  chown "$user:$user" "$auth_file"
+}
+
+main() {
+  local user="${ADMIN_USER}"
+  [[ -z "$user" ]] && user="$(prompt_for_username)"
+
+  if [[ -z "$user" ]]; then
+    err "Username cannot be empty."
+    exit 1
+  fi
+
+  ensure_user_exists "$user"
+
+  TEMP_FILE="$(mktemp)"
+  collect_keys "$TEMP_FILE"
+  install_keys "$user" "$TEMP_FILE"
   rm -f "$TEMP_FILE"
 
-  chmod 600 "$auth_file"
-  chown "$NEW_USER:$NEW_USER" "$auth_file"
-
-  log "User '$NEW_USER' SSH configuration completed."
+  log "User '$user' SSH configuration completed."
   echo "You may now log in as:"
-  echo "  ssh ${NEW_USER}@your_server_ip"
+  echo "  ssh ${user}@your_server_ip"
 }
 
 main "$@"

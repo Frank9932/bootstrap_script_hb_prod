@@ -16,16 +16,26 @@ source "$(dirname "$0")/00_common.sh"
 
 JAILD_DIR="/etc/fail2ban/jail.d"
 SSHD_JAIL_CONF="${JAILD_DIR}/sshd-hardening.conf"
+SSH_PORT="${SSH_PORT:-}"
 
 install_fail2ban() {
-  log "Installing EPEL repository (idempotent)..."
-  dnf install -y epel-release || warn "epel-release installation issue; likely already installed."
-
+  ensure_epel
   log "Installing Fail2ban..."
-  if ! dnf install -y fail2ban fail2ban-firewalld; then
+  if ! ensure_packages fail2ban fail2ban-firewalld; then
     warn "fail2ban-firewalld not available, installing fail2ban only..."
-    dnf install -y fail2ban
+    ensure_package fail2ban
   fi
+}
+
+detect_ssh_port() {
+  local port=""
+  if command -v sshd &>/dev/null; then
+    port="$(sshd -T 2>/dev/null | awk '/^port / {print $2; exit}')"
+  fi
+  if [[ -z "$port" ]]; then
+    port="22"
+  fi
+  echo "$port"
 }
 
 write_sshd_jail() {
@@ -33,10 +43,10 @@ write_sshd_jail() {
   mkdir -p "$JAILD_DIR"
 
   # Overwrite every time to ensure consistent configuration
-  cat > "$SSHD_JAIL_CONF" << 'EOF_JAIL'
+  cat > "$SSHD_JAIL_CONF" <<EOF_JAIL
 [sshd]
 enabled  = true
-port     = ssh
+port     = ${SSH_PORT}
 filter   = sshd
 
 # Default SSH log location on RHEL / AlmaLinux
@@ -72,8 +82,15 @@ enable_and_start_fail2ban() {
 
 main() {
   require_root
+  require_rhel_like
 
-  log "=== Fail2ban SSH protection setup start ==="
+  local port="${SSH_PORT:-}"
+  if [[ -z "$port" ]]; then
+    port="$(detect_ssh_port)"
+  fi
+  SSH_PORT="$port"
+
+  log "=== Fail2ban SSH protection setup start (port ${SSH_PORT}) ==="
 
   install_fail2ban
   write_sshd_jail
