@@ -22,8 +22,11 @@ ADMIN_SSH_KEYS="${ADMIN_SSH_KEYS:-${SSH_PUBKEYS:-}}"
 ADMIN_SSH_KEYS_FILE="${ADMIN_SSH_KEYS_FILE:-${SSH_PUBKEYS_FILE:-}}"
 
 prompt_for_username() {
-  local name
-  read -rp "Enter the username to create (e.g., trader): " name
+  local name default="${ADMIN_USER:-admin}"
+  read -rp "Enter the username to create [${default}]: " name
+  if [[ -z "$name" ]]; then
+    name="$default"
+  fi
   echo "$name"
 }
 
@@ -89,8 +92,8 @@ install_keys() {
 }
 
 main() {
-  local user="${ADMIN_USER}"
-  [[ -z "$user" ]] && user="$(prompt_for_username)"
+  local user
+  user="$(prompt_for_username)"
 
   if [[ -z "$user" ]]; then
     err "Username cannot be empty."
