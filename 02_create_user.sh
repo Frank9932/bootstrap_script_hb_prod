@@ -20,6 +20,7 @@ ADMIN_USER="${ADMIN_USER:-admin}"
 ADMIN_SHELL="${ADMIN_SHELL:-/bin/bash}"
 ADMIN_SSH_KEYS="${ADMIN_SSH_KEYS:-${SSH_PUBKEYS:-}}"
 ADMIN_SSH_KEYS_FILE="${ADMIN_SSH_KEYS_FILE:-${SSH_PUBKEYS_FILE:-}}"
+LOCK_ADMIN_PASSWORD="${LOCK_ADMIN_PASSWORD:-1}"
 
 prompt_for_username() {
   local name default="${ADMIN_USER:-admin}"
@@ -106,6 +107,13 @@ main() {
   collect_keys "$TEMP_FILE"
   install_keys "$user" "$TEMP_FILE"
   rm -f "$TEMP_FILE"
+
+  if [[ "${LOCK_ADMIN_PASSWORD}" == "1" ]]; then
+    passwd -l "$user"
+    warn "Locked password for user '$user' (LOCK_ADMIN_PASSWORD=1). They authenticate with SSH keys."
+  fi
+
+  ensure_wheel_nopasswd
 
   log "User '$user' SSH configuration completed."
   echo "You may now log in as:"

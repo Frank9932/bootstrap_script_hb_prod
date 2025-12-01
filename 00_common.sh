@@ -133,6 +133,22 @@ write_file_if_changed() {
   fi
 }
 
+ensure_wheel_nopasswd() {
+  local file="/etc/sudoers.d/00-wheel-nopasswd"
+  require_cmd visudo
+  umask 0137 # ensures 0640 max; we'll set to 0440 explicitly
+  write_file_if_changed "$file" <<'EOF'
+%wheel ALL=(ALL) NOPASSWD: ALL
+Defaults:%wheel !requiretty
+EOF
+  chmod 0440 "$file"
+  if ! visudo -cf "$file" >/dev/null; then
+    err "visudo validation failed for $file"
+    exit 1
+  fi
+  log "Sudoers drop-in ensured at ${file} (wheel passwordless sudo, !requiretty)."
+}
+
 run_system_basics() {
   require_rhel_like
   dnf_update_if_enabled

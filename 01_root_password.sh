@@ -15,6 +15,7 @@ require_cmd openssl
 
 ROTATE_ROOT_PASSWORD="${ROTATE_ROOT_PASSWORD:-1}"
 ROOT_PASSWORD_FILE="${ROOT_PASSWORD_FILE:-/root/root_emergency_password.txt}"
+LOCK_ROOT_PASSWORD="${LOCK_ROOT_PASSWORD:-1}"
 
 generate_password() {
   if [[ -n "${ROOT_PASSWORD:-}" ]]; then
@@ -44,6 +45,11 @@ main() {
   } > "$ROOT_PASSWORD_FILE"
 
   log "Emergency root password written to: $ROOT_PASSWORD_FILE"
+
+  if [[ "${LOCK_ROOT_PASSWORD}" == "1" ]]; then
+    passwd -l root
+    warn "Root account password has been locked (LOCK_ROOT_PASSWORD=1). Unlock with: passwd -u root"
+  fi
 
   cat <<EOF
 
